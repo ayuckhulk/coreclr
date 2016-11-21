@@ -683,7 +683,7 @@ const unsigned char AbbrevTable[] = {
         DW_AT_type, DW_FORM_ref4, 0, 0,
 
     4, DW_TAG_subprogram, DW_CHILDREN_yes,
-        DW_AT_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1,
+        DW_AT_name, DW_FORM_strp, DW_AT_linkage_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1,
         DW_AT_type, DW_FORM_ref4, DW_AT_external, DW_FORM_flag_present,
         DW_AT_low_pc, DW_FORM_addr, DW_AT_high_pc,
 #if defined(_TARGET_AMD64_)
@@ -719,7 +719,7 @@ const unsigned char AbbrevTable[] = {
         DW_AT_upper_bound, DW_FORM_exprloc, 0, 0,
 
     12, DW_TAG_subprogram, DW_CHILDREN_yes,
-        DW_AT_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1,
+        DW_AT_name, DW_FORM_strp, DW_AT_linkage_name, DW_FORM_strp, DW_AT_decl_file, DW_FORM_data1, DW_AT_decl_line, DW_FORM_data1,
         DW_AT_type, DW_FORM_ref4, DW_AT_external, DW_FORM_flag_present,
         DW_AT_low_pc, DW_FORM_addr, DW_AT_high_pc, 
 #if defined(_TARGET_AMD64_)
@@ -771,6 +771,7 @@ struct __attribute__((packed)) DebugInfoSub
 {
     uint8_t m_sub_abbrev;
     uint32_t m_sub_name;
+    uint32_t m_linkage_name;
     uint8_t m_file, m_line;
     uint32_t m_sub_type;
 #if defined(_TARGET_AMD64_)
@@ -1029,6 +1030,49 @@ void TypeMember::DumpStaticDebugInfo(char* ptr, int& offset)
     offset += ptrSize + 2;
 }
 
+void FunctionMember::DumpLinkageName(char* ptr, int& offset)
+{
+    SString namespaceOrClassName;
+    SString methodName;
+
+    md->GetMethodInfoNoSig(namespaceOrClassName, methodName);
+    SString utf8namespaceOrClassName;
+    SString utf8methodName;
+    namespaceOrClassName.ConvertToUTF8(utf8namespaceOrClassName);
+    methodName.ConvertToUTF8(utf8methodName);
+
+    const char *nspace = utf8namespaceOrClassName.GetUTF8NoConvert();
+    const char *mname = utf8methodName.GetUTF8NoConvert();
+
+    NewArrayHolder<char> buf = new char[2*(strlen(nspace)+strlen(m_member_name))+20];
+
+    sprintf(buf, "_ZN");
+
+    int begin = 0;
+    for (int i = 0; i < strlen(nspace) + 1; i++)
+    {
+        if (nspace[i] == '.' || nspace[i] == 0)
+        {
+            if (begin == i)
+                break;
+
+            sprintf(buf + strlen(buf), "%i", i - begin);
+            int len = strlen(buf);
+            strncpy(buf + len, nspace + begin, i - begin);
+            buf[len + i - begin] = 0;
+            begin = i + 1;
+        }
+    }
+
+    sprintf(buf + strlen(buf), "%i%sEv", strlen(m_member_name), m_member_name);
+
+    if (ptr != nullptr)
+    {
+        strcpy(ptr + offset, buf);
+    }
+    m_linkage_name_offset = offset;
+    offset += strlen(buf) + 1;
+}
 
 void FunctionMember::DumpStrings(char* ptr, int& offset)
 {
@@ -1037,7 +1081,9 @@ void FunctionMember::DumpStrings(char* ptr, int& offset)
     for (int i = 0; i < m_num_vars; ++i)
     {
         vars[i].DumpStrings(ptr, offset);
-    } 
+    }
+
+    DumpLinkageName(ptr, offset);
 }
 
 void FunctionMember::DumpDebugInfo(char* ptr, int& offset)
@@ -1048,6 +1094,7 @@ void FunctionMember::DumpDebugInfo(char* ptr, int& offset)
 
         subEntry.m_sub_abbrev = 4;
         subEntry.m_sub_name = m_member_name_offset;
+        subEntry.m_linkage_name = m_linkage_name_offset;
         subEntry.m_file = m_file;
         subEntry.m_line = m_line;
         subEntry.m_sub_type = m_member_type->m_type_offset;
