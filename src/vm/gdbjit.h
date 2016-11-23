@@ -392,7 +392,7 @@ private:
     static bool BuildStringTableSection(MemBuf& strTab);
     static bool BuildDebugStrings(MemBuf& buf, PTK_TypeInfoMap pTypeMap);
     static bool BuildDebugAbbrev(MemBuf& buf);
-    static bool BuildDebugInfo(MemBuf& buf, PTK_TypeInfoMap pTypeMap);
+    static bool BuildDebugInfo(MemBuf& buf, PTK_TypeInfoMap pTypeMap, SymbolsInfo* lines, unsigned nlines);
     static bool BuildDebugPub(MemBuf& buf, const char* name, uint32_t size, uint32_t dieOffset);
     static bool BuildLineTable(MemBuf& buf, PCODE startAddr, TADDR codeSize, SymbolsInfo* lines, unsigned nlines);
     static bool BuildFileTable(MemBuf& buf, SymbolsInfo* lines, unsigned nlines);
@@ -425,6 +425,8 @@ public:
           m_num_vars(num_args + num_locals),
           m_entry_offset(0),
           vars(new VarDebugInfo[m_num_vars]),
+          lines(NULL),
+          nlines(0),
           m_linkage_name_offset(0),
           dumped(false)
     {
@@ -445,6 +447,7 @@ public:
 
     void DumpStrings(char* ptr, int& offset) override;
     void DumpDebugInfo(char* ptr, int& offset) override;
+    void DumpTryCatchDebugInfo(char* ptr, int& offset);
     HRESULT GetLocalsDebugInfo(NotifyGdb::PTK_TypeInfoMap pTypeMap,
                            LocalsInfo& locals,
                            int startNativeOffset);
@@ -462,10 +465,13 @@ public:
     uint16_t m_num_vars;
     int m_entry_offset;
     VarDebugInfo* vars;
+    SymbolsInfo* lines;
+    unsigned nlines;
     int m_linkage_name_offset;
 private:
     int GetArgsAndLocalsLen();
     void DumpLinkageName(char* ptr, int& offset);
+    TADDR GetOffsetsInRange(int offset, int len, TADDR *startOffset, TADDR *endOffset);
     BOOL dumped;
 };
 #endif // #ifndef __GDBJIT_H__
