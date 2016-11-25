@@ -2459,7 +2459,7 @@ bool NotifyGdb::CollectCalledMethods(MethodDesc* pMD, const SymbolsInfo* lines, 
     for (TK_CalledMethodMap::Iterator it = methodMap.Begin(); it != end; ++it)
     {
         TADDR callAddr = (TADDR)it->Key();
-        if (!codeAddrs.Contains(callAddr))
+        if (!codeAddrs.Contains(callAddr) && callAddr != (TADDR)pMD->GetNativeCode())
         {
             MethodDesc* calledMD = it->Value();
             LPCUTF8 methodName = calledMD->GetName();
@@ -2472,6 +2472,7 @@ bool NotifyGdb::CollectCalledMethods(MethodDesc* pMD, const SymbolsInfo* lines, 
             codeAddrs.Add(callAddr);
         }
     }
+    SymbolCount = i;
     return true;
 }
 
