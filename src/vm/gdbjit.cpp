@@ -2251,6 +2251,9 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
             prevFile = lines[i].fileIndex;
         }
 
+        if (i > 0 && lines[i - 1].nativeOffset == lines[i].nativeOffset)
+            continue;
+
         IssueSetAddress(ptr, startAddr + lines[i].nativeOffset);
 
         if (lines[i].lineNumber != prevLine) {
