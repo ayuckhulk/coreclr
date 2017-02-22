@@ -33,11 +33,6 @@ GetTypeInfoFromTypeHandle(TypeHandle typeHandle, NotifyGdb::PTK_TypeInfoMap pTyp
         case ELEMENT_TYPE_I1:
         case ELEMENT_TYPE_U1:
         case ELEMENT_TYPE_CHAR:
-            typeInfo = new (nothrow) ByteTypeInfo(typeHandle, CorElementTypeToDWEncoding[corType]);
-            if (typeInfo == nullptr)
-                return nullptr;
-            typeInfo->m_type_size = CorTypeInfo::Size(corType);
-            break;
         case ELEMENT_TYPE_VOID:
         case ELEMENT_TYPE_BOOLEAN:
         case ELEMENT_TYPE_I2:
@@ -50,7 +45,7 @@ GetTypeInfoFromTypeHandle(TypeHandle typeHandle, NotifyGdb::PTK_TypeInfoMap pTyp
         case ELEMENT_TYPE_R8:
         case ELEMENT_TYPE_U:
         case ELEMENT_TYPE_I:
-            typeInfo = new (nothrow) PrimitiveTypeInfo(typeHandle, CorElementTypeToDWEncoding[corType]);
+            typeInfo = new (nothrow) ByteTypeInfo(typeHandle, CorElementTypeToDWEncoding[corType]);
             if (typeInfo == nullptr)
                 return nullptr;
 
@@ -1042,6 +1037,22 @@ void ByteTypeInfo::DumpStrings(char* ptr, int& offset)
             strcpy(m_typedef_info->m_typedef_name, "sbyte");
         else if (strcmp(m_type_name, "char16_t") == 0)
             strcpy(m_typedef_info->m_typedef_name, "char");
+        else if (strcmp(m_type_name, "System.Int16") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "short");
+        else if (strcmp(m_type_name, "System.UInt16") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "ushort");
+        else if (strcmp(m_type_name, "System.Single") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "float");
+        else if (strcmp(m_type_name, "System.Double") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "double");
+        else if (strcmp(m_type_name, "System.Int64") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "long");
+        else if (strcmp(m_type_name, "System.UInt64") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "ulong");
+        else if (strcmp(m_type_name, "System.Decimal") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "decimal");
+        else if (strcmp(m_type_name, "System.Boolean") == 0)
+            strcpy(m_typedef_info->m_typedef_name, "bool");
         else
             strcpy(m_typedef_info->m_typedef_name, m_type_name);
     }
