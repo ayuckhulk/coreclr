@@ -11030,55 +11030,72 @@ private:
             }
             break;
         case ELEMENT_TYPE_VOID:
-            swprintf_s(typeName, typeNameLen, W("void\0"));
+            //swprintf_s(typeName, typeNameLen, W("void\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Void\0"));
             break;
         case ELEMENT_TYPE_BOOLEAN:
-            swprintf_s(typeName, typeNameLen, W("bool\0"));
+            //swprintf_s(typeName, typeNameLen, W("bool\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Bool\0"));
             break;
         case ELEMENT_TYPE_CHAR:
-            swprintf_s(typeName, typeNameLen, W("char\0"));
+            //swprintf_s(typeName, typeNameLen, W("char\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Char\0"));
             break;
         case ELEMENT_TYPE_I1:
-            swprintf_s(typeName, typeNameLen, W("signed byte\0"));
+            //swprintf_s(typeName, typeNameLen, W("signed byte\0"));
+            swprintf_s(typeName, typeNameLen, W("System.SByte\0"));
             break;
         case ELEMENT_TYPE_U1:
-            swprintf_s(typeName, typeNameLen, W("byte\0"));
+            //swprintf_s(typeName, typeNameLen, W("byte\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Byte\0"));
             break;
         case ELEMENT_TYPE_I2:
-            swprintf_s(typeName, typeNameLen, W("short\0"));
+            //swprintf_s(typeName, typeNameLen, W("short\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Int16\0"));
             break;
         case ELEMENT_TYPE_U2:
-            swprintf_s(typeName, typeNameLen, W("unsigned short\0"));
+            //swprintf_s(typeName, typeNameLen, W("unsigned short\0"));
+            swprintf_s(typeName, typeNameLen, W("System.UInt16\0"));
             break;    
         case ELEMENT_TYPE_I4:
-            swprintf_s(typeName, typeNameLen, W("int\0"));
+            //swprintf_s(typeName, typeNameLen, W("int\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Int32\0"));
             break;
         case ELEMENT_TYPE_U4:
-            swprintf_s(typeName, typeNameLen, W("unsigned int\0"));
+            //swprintf_s(typeName, typeNameLen, W("unsigned int\0"));
+            swprintf_s(typeName, typeNameLen, W("System.UInt32\0"));
             break;
         case ELEMENT_TYPE_I8:
-            swprintf_s(typeName, typeNameLen, W("long\0"));
+            //swprintf_s(typeName, typeNameLen, W("long\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Int64\0"));
             break;
         case ELEMENT_TYPE_U8:
-            swprintf_s(typeName, typeNameLen, W("unsigned long\0"));
+            //swprintf_s(typeName, typeNameLen, W("unsigned long\0"));
+            swprintf_s(typeName, typeNameLen, W("System.UInt64\0"));
             break;
         case ELEMENT_TYPE_R4:
-            swprintf_s(typeName, typeNameLen, W("float\0"));
+            //swprintf_s(typeName, typeNameLen, W("float\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Single\0"));
             break;
         case ELEMENT_TYPE_R8:
-            swprintf_s(typeName, typeNameLen, W("double\0"));
+            //swprintf_s(typeName, typeNameLen, W("double\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Double\0"));
             break;
         case ELEMENT_TYPE_OBJECT:
-            swprintf_s(typeName, typeNameLen, W("object\0"));
+            //swprintf_s(typeName, typeNameLen, W("object\0"));
+            swprintf_s(typeName, typeNameLen, W("System.Object\0"));
             break;
         case ELEMENT_TYPE_STRING:
-            swprintf_s(typeName, typeNameLen, W("string\0"));
+            //swprintf_s(typeName, typeNameLen, W("string\0"));
+            swprintf_s(typeName, typeNameLen, W("System.String\0"));
             break;
         case ELEMENT_TYPE_I:
-            swprintf_s(typeName, typeNameLen, W("IntPtr\0"));
+            //swprintf_s(typeName, typeNameLen, W("IntPtr\0"));
+            swprintf_s(typeName, typeNameLen, W("System.IntPtr\0"));
             break;
         case ELEMENT_TYPE_U:
-            swprintf_s(typeName, typeNameLen, W("UIntPtr\0"));
+            //swprintf_s(typeName, typeNameLen, W("UIntPtr\0"));
+            swprintf_s(typeName, typeNameLen, W("System.UIntPtr\0"));
             break;
         case ELEMENT_TYPE_SZARRAY:
         case ELEMENT_TYPE_ARRAY:
