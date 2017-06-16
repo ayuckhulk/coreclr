@@ -102,10 +102,13 @@ GetTypeInfoFromTypeHandle(TypeHandle typeHandle,
                     base = pField->GetBase();
 
                     // TODO: add support of generics with static fields
-                    if (pField->IsRVA() || !pMT->IsDynamicStatics())
+                    if (base != 0) //pField->IsRVA() || !pMT->IsDynamicStatics())
                     {
                         PTR_VOID pAddress = pField->GetStaticAddressHandle((PTR_VOID)dac_cast<TADDR>(base));
                         typeInfo->members[i].m_static_member_address = dac_cast<TADDR>(pAddress);
+                    } else {
+                        // set invalid non-null address to indicate unsupported static field
+                        typeInfo->members[i].m_static_member_address = dac_cast<TADDR>(-1);
                     }
                 }
 
