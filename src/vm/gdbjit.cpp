@@ -2395,8 +2395,20 @@ bool NotifyGdb::BuildLineProg(MemBuf& buf, PCODE startAddr, TADDR codeSize, Symb
 
         if (lines[i].ilOffset == ICorDebugInfo::EPILOG)
             IssueSimpleCommand(ptr, DW_LNS_set_epilogue_begin);
-        else if (i > 0 && lines[i - 1].ilOffset == ICorDebugInfo::PROLOG)
-            IssueSimpleCommand(ptr, DW_LNS_set_prologue_end);
+        else if (i >= 1)
+        {
+            // We need to set prologue_end after JIT_DbgIsJustMyCode (marked as ICorDebugInfo::NO_MAPPING)
+            // in order for ICorDebug API to give us arguments and local variables.
+            bool found_prologue =
+                lines[i - 1].ilOffset == ICorDebugInfo::PROLOG &&
+                lines[i].ilOffset != ICorDebugInfo::NO_MAPPING;
+            bool prologue_skipped_no_mapping =
+                i >= 2 &&
+                lines[i - 2].ilOffset == ICorDebugInfo::PROLOG &&
+                lines[i - 1].ilOffset == ICorDebugInfo::NO_MAPPING;
+            if (found_prologue || prologue_skipped_no_mapping)
+                IssueSimpleCommand(ptr, DW_LNS_set_prologue_end);
+        }
 
         IssueParamCommand(ptr, DW_LNS_copy, NULL, 0);
     }
