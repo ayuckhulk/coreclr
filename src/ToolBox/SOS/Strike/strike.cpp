@@ -10960,7 +10960,7 @@ private:
                 if(isFirst)
                 {
                     isFirst = false;
-                    wcsncat_s(typeName, typeNameLen, W("&lt;"), typeNameLen);
+                    wcsncat_s(typeName, typeNameLen, W("<"), typeNameLen);
                 }
                 else wcsncat_s(typeName, typeNameLen, W(","), typeNameLen);
 
@@ -10970,7 +10970,7 @@ private:
                 wcsncat_s(typeName, typeNameLen, typeParamName, typeNameLen);
             }
             if(!isFirst)
-                wcsncat_s(typeName, typeNameLen, W("&gt;"), typeNameLen);
+                wcsncat_s(typeName, typeNameLen, W(">"), typeNameLen);
         }
 
         return S_OK;
