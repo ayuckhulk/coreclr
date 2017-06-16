@@ -15141,6 +15141,155 @@ HRESULT Debugger::TerminateAppDomainIPC(void)
 
 #ifndef DACCESS_COMPILE
 
+void dummy()
+{
+}
+
+extern void FuncEvalHijackRealWorker(DebuggerEval *pDE, Thread* pThread, FuncEvalFrame* pFEFrame);
+
+typedef struct {
+    void *ptype;
+    void *paddr;
+    void *vmAppDomain;
+    void *vmObjectHandle;
+    char data[sizeof(((DebuggerIPCEvent*)NULL)->FuncEvalComplete)];
+} __jit_debug_func_eval_result_t;
+
+extern "C"
+__jit_debug_func_eval_result_t __attribute__((noinline)) __attribute__ ((visibility ("default")))
+    __jit_debug_func_eval(const void *arg)
+{
+    __jit_debug_func_eval_result_t result = {NULL, NULL, NULL, NULL, {0}};
+
+    if (!arg)
+        return result;
+
+    const uint8_t * p = (const uint8_t *)arg;
+    size_t p_len = sizeof(DebuggerIPCE_FuncEvalInfo);
+
+    DebuggerIPCE_FuncEvalInfo *pEvalInfo = (DebuggerIPCE_FuncEvalInfo *)arg;
+    bool fInException = pEvalInfo->evalDuringException;
+    DebuggerEval *pDE = new (interopsafe, nothrow) DebuggerEval(NULL, pEvalInfo, fInException);
+
+    if (pDE == NULL)
+    {
+        printf("E_OUTOFMEMORY\n");
+        return result;
+    }
+    else if (!pDE->Init())
+    {
+        // We fail to change the m_breakpointInstruction field to PAGE_EXECUTE_READWRITE permission.
+        printf("E_FAIL\n");
+        return result;
+    }
+
+    SIZE_T argDataAreaSize = 0;
+
+    argDataAreaSize += pEvalInfo->genericArgsNodeCount * sizeof(DebuggerIPCE_TypeArgData);
+
+    SIZE_T afterGenericTypes = argDataAreaSize;
+
+    if ((pEvalInfo->funcEvalType == DB_IPCE_FET_NORMAL) ||
+        (pEvalInfo->funcEvalType == DB_IPCE_FET_NEW_OBJECT) ||
+        (pEvalInfo->funcEvalType == DB_IPCE_FET_NEW_OBJECT_NC))
+        argDataAreaSize += pEvalInfo->argCount * sizeof(DebuggerIPCE_FuncEvalArgData);
+    else if (pEvalInfo->funcEvalType == DB_IPCE_FET_NEW_STRING)
+        argDataAreaSize += pEvalInfo->stringSize;
+    else if (pEvalInfo->funcEvalType == DB_IPCE_FET_NEW_ARRAY)
+        argDataAreaSize += pEvalInfo->arrayRank * sizeof(SIZE_T);
+
+    if (argDataAreaSize > 0)
+    {
+        pDE->m_argData = new (interopsafe, nothrow) BYTE[argDataAreaSize];
+
+        if (pDE->m_argData == NULL)
+        {
+            DeleteInteropSafeExecutable(pDE);
+            printf("E_OUTOFMEMORY\n");
+            return result;
+        }
+
+        // Pass back the address of the argument data area so the right side can write to it for us.
+        memmove(pDE->m_argData, p + p_len, argDataAreaSize);
+
+        if (afterGenericTypes > argDataAreaSize)
+        {
+            DebuggerIPCE_FuncEvalArgData *pargs = reinterpret_cast<DebuggerIPCE_FuncEvalArgData*>(pDE->m_argData + afterGenericTypes);
+
+            if (pargs[0].fullArgTypeNodeCount > 0)
+            {
+                ULONG32 typesSize = sizeof(DebuggerIPCE_TypeArgData) * pargs[0].fullArgTypeNodeCount;
+                pargs[0].fullArgType = new (interopsafe, nothrow) BYTE[typesSize];
+                memmove(pargs[0].fullArgType, p + p_len + argDataAreaSize, typesSize);
+            }
+        }
+    }
+
+    Thread *pThread = g_pEEInterface->GetThread();
+
+    //
+    // We cannot scope the following in a GCX_FORBID(), but we would like to.  But we need the frames on the
+    // stack here, so they must never go out of scope.
+    //
+
+    //
+    // Push our FuncEvalFrame. The return address is equal to the IP in the saved context in the DebuggerEval. The
+    // m_Datum becomes the ptr to the DebuggerEval. The frame address also serves as the address of the catch-handler-found.
+    //
+    FrameWithCookie<FuncEvalFrame> FEFrame(pDE, (TADDR)&dummy /*GetIP(&pDE->m_context)*/, true);
+    FEFrame.Push();
+
+    // On ARM the single step flag is per-thread and not per context.  We need to make sure that the SS flag is cleared
+    // for the funceval, and that the state is back to what it should be after the funceval completes.
+#ifdef _TARGET_ARM_
+    bool ssEnabled = pDE->m_thread->IsSingleStepEnabled();
+    if (ssEnabled)
+        pDE->m_thread->DisableSingleStep();
+#endif
+
+    FuncEvalHijackRealWorker(pDE, pThread, &FEFrame);
+
+    AppDomain *pDomain = pThread->GetDomain();
+    AppDomain *pResultDomain = ((pDE->m_debuggerModule == NULL) ? pDomain : pDE->m_debuggerModule->GetAppDomain());
+    _ASSERTE( pResultDomain->GetId() == pDE->m_appDomainId );
+    
+    // Send a func eval complete event to the Right Side.
+
+    DebuggerIPCEvent ipce;
+
+    ipce.FuncEvalComplete.funcEvalKey = pDE->m_funcEvalKey;
+    ipce.FuncEvalComplete.successful = pDE->m_successful;
+    ipce.FuncEvalComplete.aborted = pDE->m_aborted;
+    ipce.FuncEvalComplete.resultAddr = pDE->m_result;
+    ipce.FuncEvalComplete.vmAppDomain.SetRawPtr(pResultDomain);
+    ipce.FuncEvalComplete.vmObjectHandle = pDE->m_vmObjectHandle;
+
+    //Debugger::
+    g_pDebugger->TypeHandleToExpandedTypeInfo(pDE->m_retValueBoxing, // whether return values get boxed or not depends on the particular FuncEval we're doing...
+                                           pResultDomain,
+                                           pDE->m_resultType,
+                                           &ipce.FuncEvalComplete.resultType);
+
+    // We must adjust the result address to point to the right place
+    ipce.FuncEvalComplete.resultAddr = ArgSlotEndianessFixup((ARG_SLOT*)ipce.FuncEvalComplete.resultAddr, 
+        GetSizeForCorElementType(ipce.FuncEvalComplete.resultType.elementType));
+
+    memmove(&result.data, &ipce.FuncEvalComplete, sizeof(ipce.FuncEvalComplete));
+
+    result.vmAppDomain = pResultDomain;
+    result.vmObjectHandle = pDE->m_vmObjectHandle.GetRawPtr();
+    result.ptype = pDE->m_resultType.AsPtr();
+    result.paddr = ipce.FuncEvalComplete.resultAddr;
+
+#ifdef _TARGET_ARM_
+    if (ssEnabled)
+        pDE->m_thread->EnableSingleStep();
+#endif
+
+    FEFrame.Pop();
+    return result;
+};
+
 //
 // FuncEvalSetup sets up a function evaluation for the given method on the given thread.
 //
