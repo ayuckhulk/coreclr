@@ -9869,7 +9869,7 @@ public:
  * Eval class
  * ------------------------------------------------------------------------- */
 
-class CordbEval : public CordbBase, public ICorDebugEval, public ICorDebugEval2
+class CordbEval : public CordbBase, public ICorDebugEval, public ICorDebugEval2, public ICorDebugEval3
 {
 public:
     CordbEval(CordbThread* pThread);
@@ -9953,10 +9953,26 @@ public:
     COM_METHOD RudeAbort();
 
     //-----------------------------------------------------------
+    // ICorDebugEval3
+    //-----------------------------------------------------------
+
+    COM_METHOD CallParameterizedFunctionData(ICorDebugFunction * pFunction,
+                                             ULONG32 nTypeArgs,
+                                             ICorDebugType * rgpTypeArgs[],
+                                             ULONG32 nArgs,
+                                             ICorDebugValue * rgpArgs[],
+                                             BYTE *pBuffer,
+                                             ULONG32 pBufferSize,
+                                             ULONG32 *pCallSize);
+
+    COM_METHOD CallParameterizedFunctionResult(BYTE *pBuffer, ICorDebugValue **ppResult);
+
+    //-----------------------------------------------------------
     // Non-COM methods
     //-----------------------------------------------------------
     HRESULT GatherArgInfo(ICorDebugValue *pValue,
-                          DebuggerIPCE_FuncEvalArgData *argData);
+                          DebuggerIPCE_FuncEvalArgData *argData,
+                          BYTE **callBuffer = NULL);
     HRESULT SendCleanup();
 
     // Create a RS literal for primitive type funceval result. In case the result is used as an argument for
@@ -9979,7 +9995,10 @@ private:
     CordbClass                *m_class;
     DebuggerIPCE_FuncEvalType  m_evalType;
 
-    HRESULT SendFuncEval(unsigned int genericArgsCount, ICorDebugType *genericArgs[], void *argData1, unsigned int argData1Size, void *argData2, unsigned int argData2Size, DebuggerIPCEvent * event);
+    HRESULT SendFuncEval(unsigned int genericArgsCount, ICorDebugType *genericArgs[], void *argData1, unsigned int argData1Size, void *argData2, unsigned int argData2Size, DebuggerIPCEvent * event,
+                         BYTE *pBuffer = NULL,
+                         ULONG32 pBufferSize = 0,
+                         ULONG32 *pCallSize = NULL);
     HRESULT FilterHR(HRESULT hr);
     BOOL DoAppDomainsMatch( CordbAppDomain* pAppDomain, ULONG32 nTypes, ICorDebugType *pTypes[], ULONG32 nValues, ICorDebugValue *pValues[] );
 

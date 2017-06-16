@@ -13277,6 +13277,111 @@ EXTERN_C const IID IID_ICorDebugEval2;
 #endif 	/* __ICorDebugEval2_INTERFACE_DEFINED__ */
 
 
+#ifndef __ICorDebugEval3_INTERFACE_DEFINED__
+#define __ICorDebugEval3_INTERFACE_DEFINED__
+
+/* interface ICorDebugEval3 */
+/* [unique][uuid][local][object] */ 
+
+
+EXTERN_C const IID IID_ICorDebugEval3;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    MIDL_INTERFACE("0BAADF59-BD10-4FC2-9176-3441EDD8E053")
+    ICorDebugEval3 : public IUnknown
+    {
+    public:
+        virtual HRESULT STDMETHODCALLTYPE CallParameterizedFunctionData( 
+            /* [in] */ ICorDebugFunction *pFunction,
+            /* [in] */ ULONG32 nTypeArgs,
+            /* [size_is][in] */ ICorDebugType *ppTypeArgs[  ],
+            /* [in] */ ULONG32 nArgs,
+            /* [size_is][in] */ ICorDebugValue *ppArgs[  ],
+            /* [in][size_is][out] */ BYTE *pBuffer,
+            /* [size_is][in] */ULONG32 pBufferSize,
+            /* [out] */ ULONG32 *pCallSize) = 0;
+        
+        virtual HRESULT STDMETHODCALLTYPE CallParameterizedFunctionResult(
+            /* [in] */ BYTE *pBuffer,
+            /* [out] */ ICorDebugValue **ppResult) = 0;
+    };
+    
+    
+#else 	/* C style interface */
+
+    typedef struct ICorDebugEval3Vtbl
+    {
+        BEGIN_INTERFACE
+        
+        HRESULT ( STDMETHODCALLTYPE *QueryInterface )( 
+            ICorDebugEval3 * This,
+            /* [in] */ REFIID riid,
+            /* [annotation][iid_is][out] */ 
+            _COM_Outptr_  void **ppvObject);
+        
+        ULONG ( STDMETHODCALLTYPE *AddRef )( 
+            ICorDebugEval3 * This);
+        
+        ULONG ( STDMETHODCALLTYPE *Release )( 
+            ICorDebugEval3 * This);
+        
+        HRESULT ( STDMETHODCALLTYPE *CallParameterizedFunctionData )( 
+            ICorDebugEval3 * This,
+            /* [in] */ ICorDebugFunction *pFunction,
+            /* [in] */ ULONG32 nTypeArgs,
+            /* [size_is][in] */ ICorDebugType *ppTypeArgs[  ],
+            /* [in] */ ULONG32 nArgs,
+            /* [size_is][in] */ ICorDebugValue *ppArgs[  ],
+            /* [in][size_is][out] */ BYTE *pBuffer,
+            /* [size_is][in] */ULONG32 pBufferSize,
+            /* [out] */ ULONG32 *pCallSize);
+        
+        HRESULT ( STDMETHODCALLTYPE *CallParameterizedFunctionResult )( 
+            ICorDebugEval3 * This,
+            /* [in] */ BYTE *pBuffer,
+            /* [out] */ ICorDebugValue **ppResult);
+        
+        END_INTERFACE
+    } ICorDebugEval3Vtbl;
+
+    interface ICorDebugEval3
+    {
+        CONST_VTBL struct ICorDebugEval3Vtbl *lpVtbl;
+    };
+
+    
+
+#ifdef COBJMACROS
+
+
+#define ICorDebugEval3_QueryInterface(This,riid,ppvObject)	\
+    ( (This)->lpVtbl -> QueryInterface(This,riid,ppvObject) ) 
+
+#define ICorDebugEval3_AddRef(This)	\
+    ( (This)->lpVtbl -> AddRef(This) ) 
+
+#define ICorDebugEval3_Release(This)	\
+    ( (This)->lpVtbl -> Release(This) ) 
+
+
+#define ICorDebugEval3_CallParameterizedFunctionData(This,pFunction,nTypeArgs,ppTypeArgs,nArgs,ppArgs,pBuffer,pBufferSize,pCallSize)	\
+    ( (This)->lpVtbl -> CallParameterizedFunctionData(This,pFunction,nTypeArgs,ppTypeArgs,nArgs,ppArgs,pBuffer,pBufferSize,pCallSize) ) 
+
+#define ICorDebugEval3_CallParameterizedFunctionData(This,pBuffer,ppResult)	\
+    ( (This)->lpVtbl -> CallParameterizedFunctionData(This,pBuffer,ppResult) ) 
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+
+#endif 	/* __ICorDebugEval3_INTERFACE_DEFINED__ */
+
+
 #ifndef __ICorDebugValue_INTERFACE_DEFINED__
 #define __ICorDebugValue_INTERFACE_DEFINED__
 

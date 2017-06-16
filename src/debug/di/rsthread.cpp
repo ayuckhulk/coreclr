@@ -9272,6 +9272,10 @@ HRESULT CordbEval::QueryInterface(REFIID id, void **pInterface)
     {
         *pInterface = static_cast<ICorDebugEval2*>(this);
     }
+    else if (id == IID_ICorDebugEval3)
+    {
+        *pInterface = static_cast<ICorDebugEval3*>(this);
+    }
     else if (id == IID_IUnknown)
     {
         *pInterface = static_cast<IUnknown*>(static_cast<ICorDebugEval*>(this));
@@ -9292,7 +9296,7 @@ HRESULT CordbEval::QueryInterface(REFIID id, void **pInterface)
 // to the Left Side.
 //
 HRESULT CordbEval::GatherArgInfo(ICorDebugValue *pValue,
-                                 DebuggerIPCE_FuncEvalArgData *argData)
+                                 DebuggerIPCE_FuncEvalArgData *argData, BYTE **callBuffer)
 {
     FAIL_IF_NEUTERED(this);
     INTERNAL_SYNC_API_ENTRY(GetProcess()); //
@@ -9355,6 +9359,18 @@ HRESULT CordbEval::GatherArgInfo(ICorDebugValue *pValue,
             pValue->QueryInterface(IID_ICorDebugHandleValue, (void **) &pHandle);
             if (pHandle == NULL)
             {
+                ICorDebugReferenceValue *pRef = NULL;
+                pValue->QueryInterface(IID_ICorDebugReferenceValue, (void **) &pRef);
+
+                if (pRef)
+                {
+                    pRef->Release();
+                }
+                else
+                {
+                    _ASSERT(!"Unable to get ICorDebugReferenceValue");
+                }
+
                 // A reference value
                 cv = static_cast<CordbValue*> (static_cast<CordbReferenceValue*> (pValue));
                 argData->argIsHandleValue = !(((CordbReferenceValue *)pValue)->m_valueHome.ObjHandleIsNull());
@@ -9405,8 +9421,12 @@ HRESULT CordbEval::GatherArgInfo(ICorDebugValue *pValue,
             CordbType::GatherTypeData(cv->m_type, &curr);
 
             void *buffer = NULL;
-            IfFailRet(m_thread->GetProcess()->GetAndWriteRemoteBuffer(m_thread->GetAppDomain(), bufferSize, bufferFrom, &buffer));
-
+            //IfFailRet(m_thread->GetProcess()->GetAndWriteRemoteBuffer(m_thread->GetAppDomain(), bufferSize, bufferFrom, &buffer));
+            if (callBuffer)
+            {
+                *callBuffer = new BYTE[bufferSize];
+                memmove(*callBuffer, bufferFrom, bufferSize);
+            }
             argData->fullArgType = buffer;
             argData->fullArgTypeNodeCount = fullArgTypeNodeCount;
             // Is it enregistered?
@@ -9448,7 +9468,10 @@ HRESULT CordbEval::SendFuncEval(unsigned int genericArgsCount,
                                 ICorDebugType *genericArgs[],
                                 void *argData1, unsigned int argData1Size,
                                 void *argData2, unsigned int argData2Size,
-                                DebuggerIPCEvent * event)
+                                DebuggerIPCEvent * event,
+                                BYTE *pBuffer,
+                                ULONG32 pBufferSize,
+                                ULONG32 *pCallSize)
 {
     FAIL_IF_NEUTERED(this);
     INTERNAL_SYNC_API_ENTRY(GetProcess()); //
@@ -9490,7 +9513,44 @@ HRESULT CordbEval::SendFuncEval(unsigned int genericArgsCount,
 
     // If the send failed, return that failure.
     if (FAILED(hr))
+    {
+        // printf("SendIPCEvent failed with 0x%x tyargData=%p argData1=%p argData2=%p (%p,%i,%i,%i,%i)\n",
+        //         hr, (void*)tyargData, (void*)argData1, (void*)argData2, (void*)pBuffer,
+        //         (int)pBufferSize, (int)tyargDataSize, (int)argData1Size, (int)argData2Size);
+
+        if (pBuffer && pBufferSize >= (sizeof(DebuggerIPCE_FuncEvalInfo) + tyargDataSize + argData1Size + argData2Size))
+        {
+            BYTE *argdata = pBuffer;
+
+            memmove(argdata, &event->FuncEval, sizeof(DebuggerIPCE_FuncEvalInfo));
+            argdata += sizeof(DebuggerIPCE_FuncEvalInfo);
+            *pCallSize = sizeof(DebuggerIPCE_FuncEvalInfo);
+            if (tyargData && tyargDataSize > 0)
+            {
+                memmove(argdata, tyargData, tyargDataSize);
+                argdata += tyargDataSize;
+                *pCallSize += tyargDataSize;
+            }
+            if (argData1 && argData1Size > 0)
+            {
+                memmove(argdata, argData1, argData1Size);
+                argdata += argData1Size;
+                *pCallSize += argData1Size;
+            }
+            if (argData2 && argData2Size > 0)
+            {
+                memmove(argdata, argData2, argData2Size);
+                argdata += argData2Size;
+                *pCallSize += argData2Size;
+            }
+
+            // TADDR ptr = 0;
+            // memmove(&ptr, &event->FuncEval.vmThreadToken, sizeof(TADDR));
+
+            // printf("thread token (ptr) = %p\n", (void*)ptr);
+        }
         goto LExit;
+    }
 
     _ASSERTE(event->type == DB_IPCE_FUNC_EVAL_SETUP_RESULT);
 
@@ -9743,6 +9803,298 @@ HRESULT CordbEval::FilterHR(HRESULT hr)
     // No filtering.
     return hr;
 
+}
+
+COM_METHOD CordbEval::CallParameterizedFunctionResult(BYTE *pBuffer, ICorDebugValue **ppResult)
+{
+    PUBLIC_API_ENTRY(this);
+    FAIL_IF_NEUTERED(this);
+    VALIDATE_POINTER_TO_OBJECT(ppResult, ICorDebugValue **);
+    ATT_REQUIRE_STOPPED_MAY_FAIL(GetProcess());
+
+    *ppResult = NULL;
+
+    typedef struct MSLAYOUT
+    {
+        RSPTR_CORDBEVAL funcEvalKey;
+        bool            successful;
+        bool            aborted;
+        void           *resultAddr;
+
+        // AppDomain that the result is in.
+        VMPTR_AppDomain vmAppDomain;
+
+        VMPTR_OBJECTHANDLE vmObjectHandle;
+        DebuggerIPCE_ExpandedTypeData resultType;
+    } FuncEvalComplete_t;
+
+    FuncEvalComplete_t *fec = (FuncEvalComplete_t*)pBuffer;
+
+    // Hold the data about the result in the CordbEval for later.
+    this->m_complete       = true;
+    this->m_successful     = !!fec->successful;
+    this->m_aborted        = !!fec->aborted;
+    this->m_resultAddr     = fec->resultAddr;
+    this->m_vmObjectHandle = fec->vmObjectHandle;
+    this->m_resultType     = fec->resultType;
+    this->m_resultAppDomainToken = fec->vmAppDomain;
+
+    // Is the evaluation complete?
+    if (!m_complete)
+    {
+        return CORDBG_E_FUNC_EVAL_NOT_COMPLETE;
+    }
+
+    if (m_aborted)
+    {
+        return CORDBG_S_FUNC_EVAL_ABORTED;
+    }
+
+    // Does the evaluation have a result?
+    if (m_resultType.elementType == ELEMENT_TYPE_VOID)
+    {
+        return CORDBG_S_FUNC_EVAL_HAS_NO_RESULT;
+    }
+
+    HRESULT hr = S_OK;
+    EX_TRY
+    {
+        // Make a ICorDebugValue out of the result.
+        CordbAppDomain * pAppDomain;
+
+        if (!m_resultAppDomainToken.IsNull())
+        {
+            // @dbgtodo  funceval - push this up
+            RSLockHolder lockHolder(GetProcess()->GetProcessLock());
+
+            pAppDomain = m_thread->GetProcess()->LookupOrCreateAppDomain(m_resultAppDomainToken);            
+        }
+        else
+        {
+            pAppDomain = m_thread->GetAppDomain();
+        }
+        PREFIX_ASSUME(pAppDomain != NULL);
+
+        CordbType * pType = NULL;
+        hr = CordbType::TypeDataToType(pAppDomain, &m_resultType, &pType);
+        IfFailThrow(hr);
+
+        bool resultInHandle =
+            ((m_resultType.elementType == ELEMENT_TYPE_CLASS) ||
+            (m_resultType.elementType == ELEMENT_TYPE_SZARRAY) ||
+            (m_resultType.elementType == ELEMENT_TYPE_OBJECT) ||
+            (m_resultType.elementType == ELEMENT_TYPE_ARRAY) ||
+            (m_resultType.elementType == ELEMENT_TYPE_STRING));
+
+        if (resultInHandle)
+        {
+            // if object handle is null here, something has gone wrong!!!
+            _ASSERTE(!m_vmObjectHandle.IsNull());
+
+            if (m_pHandleValue == NULL)
+            {
+                // Create CordbHandleValue for result
+                RSInitHolder<CordbHandleValue> pHandleValue(new CordbHandleValue(pAppDomain, pType, HANDLE_STRONG));
+
+                // Initialize the handle value object. The HandleValue will now
+                // own the m_objectHandle.
+                hr = pHandleValue->Init(m_vmObjectHandle);
+
+                if (!SUCCEEDED(hr))
+                {
+                    // Neuter the new object we've been working on. This will
+                    // call Dispose(), and that will go back to the left side
+                    // and free the handle that we got above.
+                    pHandleValue->NeuterLeftSideResources(); 
+
+                    // 
+
+                    // Do not delete chv here.  The neuter list still has a reference to it, and it will be cleaned up automatically.
+                    ThrowHR(hr);
+                }
+                m_pHandleValue.Assign(pHandleValue);                
+                pHandleValue.ClearAndMarkDontNeuter();
+            }
+
+            // This AddRef is for caller to release            
+            // 
+            *ppResult = m_pHandleValue;
+            m_pHandleValue->ExternalAddRef();
+        }
+        else if (CorIsPrimitiveType(m_resultType.elementType) && (m_resultType.elementType != ELEMENT_TYPE_STRING))
+        {
+            // create a CordbGenericValue flagged as a literal
+            hr = CordbEval::CreatePrimitiveLiteral(pType, ppResult);
+        }
+        else
+        {
+            TargetBuffer remoteValue(m_resultAddr, CordbValue::GetSizeForType(pType, kBoxed));
+            // Now that we have the module, go ahead and create the result.
+            
+            CordbValue::CreateValueByType(pAppDomain,
+                                          pType,
+                                          true,
+                                          remoteValue,
+                                          MemoryRange(NULL, 0),
+                                          NULL,
+                                          ppResult);  // throws
+        }
+
+    }
+    EX_CATCH_HRESULT(hr);
+    return hr;
+}
+
+HRESULT CordbEval::CallParameterizedFunctionData(ICorDebugFunction *pFunction,
+                                                 ULONG32 nTypeArgs,
+                                                 ICorDebugType * rgpTypeArgs[],
+                                                 ULONG32 nArgs,
+                                                 ICorDebugValue * rgpArgs[],
+                                                 BYTE *pBuffer,
+                                                 ULONG32 pBufferSize,
+                                                 ULONG32 *pCallSize)
+{
+    PUBLIC_REENTRANT_API_ENTRY(this);
+    FAIL_IF_NEUTERED(this);
+    *pCallSize = 0;
+
+    VALIDATE_POINTER_TO_OBJECT(pFunction, ICorDebugFunction *);
+
+    if (nArgs > 0)
+    {
+        VALIDATE_POINTER_TO_OBJECT_ARRAY(rgpArgs, ICorDebugValue *, nArgs, true, true);
+    }
+
+    HRESULT hr = E_FAIL;
+
+    {
+        ATT_REQUIRE_STOPPED_MAY_FAIL(GetProcess());
+
+        // The LS will assume that all of the ICorDebugValues and ICorDebugTypes are in
+        // the same appdomain as the function.  Verify this.
+        CordbAppDomain * pMethodAppDomain = (static_cast<CordbFunction *> (pFunction))->GetAppDomain();
+
+        if (!DoAppDomainsMatch(pMethodAppDomain, nTypeArgs, rgpTypeArgs, nArgs, rgpArgs)) 
+        {
+            return ErrWrapper(CORDBG_E_APPDOMAIN_MISMATCH);
+        }
+
+        // Callers are free to reuse an ICorDebugEval object for multiple
+        // evals. Since we create a Left Side eval representation each
+        // time, we need to be sure to clean it up now that we know we're
+        // done with it.
+        hr = SendCleanup();
+
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+
+        RSLockHolder lockHolder(GetProcess()->GetProcessLock());
+
+        // Must be locked to get a cookie
+        RsPtrHolder<CordbEval> hFuncEval(this);
+        
+        if (hFuncEval.Ptr().IsNull())
+        {
+            return E_OUTOFMEMORY;
+        }
+        lockHolder.Release(); // release to send an IPC event.
+
+        // Remember the function that we're evaluating.
+        m_function = static_cast<CordbFunction *>(pFunction);
+        m_evalType = DB_IPCE_FET_NORMAL;
+
+
+        // Arrange the arguments into a form that the left side can deal
+        // with. We do this before starting the func eval setup to ensure
+        // that we can complete this step before mutating the left
+        // side.
+        DebuggerIPCE_FuncEvalArgData * pArgData = NULL;
+
+        NewArrayHolder<BYTE> argTypeBuf;
+
+        if (nArgs > 1)
+            return E_NOTIMPL;
+
+        if (nArgs > 0)
+        {
+             // We need to make the same type of array that the left side
+            // holds.
+            pArgData = new (nothrow) DebuggerIPCE_FuncEvalArgData[nArgs];
+
+            if (pArgData == NULL)
+            {
+                return E_OUTOFMEMORY;
+            }
+
+            // For each argument, convert its home into something the left
+            // side can understand.
+            for (unsigned int i = 0; i < nArgs; i++)
+            {
+                hr = GatherArgInfo(rgpArgs[i], &(pArgData[i]), &argTypeBuf);
+
+                if (FAILED(hr))
+                {
+                    printf("GatherArgInfo failed %x\n", hr);
+                    delete [] pArgData;
+                    return hr;
+                }
+            }
+        }
+
+        // Send over to the left side and get it to setup this eval.
+        DebuggerIPCEvent event;
+        m_thread->GetProcess()->InitIPCEvent(&event, DB_IPCE_FUNC_EVAL, true, m_thread->GetAppDomain()->GetADToken());
+
+        event.FuncEval.vmThreadToken = m_thread->m_vmThreadToken;
+        event.FuncEval.funcEvalType = m_evalType;
+        event.FuncEval.funcMetadataToken = m_function->GetMetadataToken();
+        event.FuncEval.vmDomainFile = m_function->GetModule()->GetRuntimeDomainFile();
+        event.FuncEval.funcEvalKey = hFuncEval.Ptr();
+        event.FuncEval.argCount = nArgs;
+        event.FuncEval.genericArgsCount = nTypeArgs;
+
+        hr = SendFuncEval(nTypeArgs,
+                          rgpTypeArgs,
+                          reinterpret_cast<void *>(pArgData),
+                          sizeof(DebuggerIPCE_FuncEvalArgData) * nArgs,
+                          NULL,
+                          0,
+                          &event,
+                          pBuffer,
+                          pBufferSize,
+                          pCallSize);
+
+        if (argTypeBuf)
+        {
+            ULONG32 addSize = sizeof(DebuggerIPCE_TypeArgData) * pArgData[0].fullArgTypeNodeCount;
+            if (*pCallSize + addSize <= pBufferSize)
+            {
+                memmove(pBuffer + *pCallSize, (void*)argTypeBuf, addSize);
+                *pCallSize += addSize;
+            }
+        }
+
+        // Cleanup
+
+        if (pArgData)
+        {
+            delete [] pArgData;
+        }
+
+        if (SUCCEEDED(hr))
+        {
+            hFuncEval.SuppressRelease(); // Now LS owns.
+        }
+    }
+
+    // Convert from LS EE-centric failure code to something more friendly to end-users.
+    // Success HRs will not be converted.
+    hr = FilterHR(hr);
+
+    // Return any failure the Left Side may have told us about.
+    return hr;
 }
 
 //---------------------------------------------------------------------------------------
