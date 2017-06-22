@@ -10869,10 +10869,26 @@ DECLARE_API(GCHandleLeaks)
 
 ICorDebugValue * g_resultCache[RESULT_CACHE_SIZE] = {NULL};
 CORDB_ADDRESS g_resultCacheAddr[RESULT_CACHE_SIZE] = {0};
+NewArrayHolder<WCHAR> g_resultCacheName[RESULT_CACHE_SIZE];
+
+static int GetResultCacheIndex(CORDB_ADDRESS addr)
+{
+    int cacheAddr = addr & RESULT_CACHE_MASK;
+
+    for (int i = 0; i < RESULT_CACHE_SIZE; i++)
+    {
+        int ind = (cacheAddr + i) & RESULT_CACHE_MASK;
+        if (g_resultCacheAddr[ind] == 0)
+            return ind;
+        if (g_resultCacheAddr[ind] == addr)
+            return ind;
+    }
+    return -1;
+}
 
 class ClrStackImplWithICorDebug
 {
-private:
+public:
     static HRESULT DereferenceAndUnboxValue(ICorDebugValue * pValue, ICorDebugValue** ppOutputValue, BOOL * pIsNull = NULL)
     {
         HRESULT Status = S_OK;
@@ -10912,7 +10928,7 @@ private:
         (*ppOutputValue)->AddRef();
         return S_OK;
     }
-
+private:
     static BOOL ShouldExpandVariable(__in_z WCHAR* varToExpand, __in_z WCHAR* currentExpansion)
     {
         if(currentExpansion == NULL || varToExpand == NULL) return FALSE;
@@ -10975,7 +10991,7 @@ private:
 
         return S_OK;
     }
-
+public:
     static HRESULT GetTypeOfValue(ICorDebugType * pType, __inout_ecount(typeNameLen) WCHAR* typeName, ULONG typeNameLen)
     {
         HRESULT Status = S_OK;
@@ -11148,7 +11164,7 @@ private:
         }
         return S_OK;
     }
-
+private:
     static HRESULT GetTypeOfValue(ICorDebugValue * pValue, __inout_ecount(typeNameLen) WCHAR* typeName, ULONG typeNameLen)
     {
         HRESULT Status = S_OK;
@@ -11949,7 +11965,19 @@ public:
 
                         CORDB_ADDRESS address = 0;
                         if (pFieldVal)
+                        {
                             pFieldVal->GetAddress(&address);
+
+                            if ((fieldAttr & fdStatic) && (_wcscmp(typeName, W("System.Decimal")) == 0))
+                            {
+                                ToRelease<ICorDebugValue> pUnboxedValue;
+                                BOOL isNull;
+                                if (SUCCEEDED(DereferenceAndUnboxValue(pFieldVal, &pUnboxedValue, &isNull)) && !isNull)
+                                {
+                                    pUnboxedValue->GetAddress(&address);
+                                }
+                            }
+                        }
 
                         ExtOut("  Field:\n    Static: %s\n    Type: %S\n    Address: %p\n    Size: %i\n    IsValueClass: %s\n    Name: %S\n",
                                         (fieldAttr & fdStatic) ? "true":"false",
@@ -12125,12 +12153,73 @@ private:
 
 public:
 
-    static HRESULT GetObjOrValueFields(ICorDebugValue* pInputValue, ICorDebugType* pTypeCast, ICorDebugILFrame * pILFrame, CORDB_ADDRESS addr, ICorDebugValue **pVal)
+    static HRESULT FillIndiciesFromName(ULONG32 nRank, ULONG32 *indicies, const WCHAR *name)
+    {
+        if (!name)
+            return E_FAIL;
+        if (*name != L'[')
+            return E_FAIL;
+        ULONG32 current_val = 0;
+        ULONG32 current_dim = 0;
+        size_t len = _wcslen(name);
+        for (ULONG32 i = 1 /* skip first '[' */; i < len; i++)
+        {
+            ULONG32 digit = 0;
+            switch(name[i])
+            {
+                case L'0': digit = 0; break;
+                case L'1': digit = 1; break;
+                case L'2': digit = 2; break;
+                case L'3': digit = 3; break;
+                case L'4': digit = 4; break;
+                case L'5': digit = 5; break;
+                case L'6': digit = 6; break;
+                case L'7': digit = 7; break;
+                case L'8': digit = 8; break;
+                case L'9': digit = 9; break;
+                case L' ': continue;
+                case L',':
+                case L']':
+                    indicies[current_dim] = current_val;
+                    current_dim++;
+                    current_val = 0;
+                    if (current_dim >= nRank)
+                        return i + 1 == len ? S_OK : E_FAIL;
+                    continue;
+                default:
+                    return E_FAIL;
+            }
+            current_val *= 10;
+            current_val += digit;
+        }
+        return E_FAIL;
+    }
+
+    static HRESULT GetObjOrValueFields(ICorDebugValue *pInputValue,
+                                       ICorDebugType *pTypeCast,
+                                       ICorDebugILFrame *pILFrame,
+                                       CORDB_ADDRESS addr,
+                                       ICorDebugValue **pVal,
+                                       const WCHAR *inputName,
+                                       const WCHAR *fullName)
     {
         HRESULT Status = S_FALSE;
 
+        WCHAR nameBuf[mdNameLen] = W("\0");
+        const WCHAR *name = inputName;
+
+        const WCHAR *nextName = inputName ? _wcschr(inputName, L'.') : NULL;
+        if (nextName)
+        {
+            wcsncat_s(nameBuf, _countof(nameBuf), inputName, nextName - inputName);
+            nextName++;
+            name = nameBuf;
+        }
+
         CORDB_ADDRESS valAddr;
-        if (SUCCEEDED(pInputValue->GetAddress(&valAddr)) && valAddr == addr)
+        IfFailRet(pInputValue->GetAddress(&valAddr));
+
+        if (valAddr == addr)
         {
             pInputValue->AddRef();
             *pVal = pInputValue;
@@ -12151,19 +12240,23 @@ public:
             return S_OK;
         }
 
+        if (!name)
+            return S_FALSE;
+
         // Array?
         ToRelease<ICorDebugArrayValue> pArrayVal;
         if (SUCCEEDED(pValue->QueryInterface(IID_ICorDebugArrayValue, (LPVOID *) &pArrayVal)))
         {
-            ULONG32 nCount = 0;
-            IfFailRet(pArrayVal->GetCount(&nCount));
-            for (ULONG32 i = 0; i < nCount; i++)
-            {
-                ToRelease<ICorDebugValue> pArrayElement;
-                IfFailRet(pArrayVal->GetElementAtPosition(i, &pArrayElement));
-                if (GetObjOrValueFields(pArrayElement, NULL, pILFrame, addr, pVal) == S_OK)
-                    return S_OK;
-            }
+            ULONG32 nRank;
+            IfFailRet(pArrayVal->GetRank(&nRank));
+            NewArrayHolder<ULONG32> indicies = new ULONG32[nRank];
+            IfFailRet(FillIndiciesFromName(nRank, indicies, name));
+
+            ToRelease<ICorDebugValue> pArrayElement;
+            IfFailRet(pArrayVal->GetElement(nRank, indicies, &pArrayElement));
+
+            if (GetObjOrValueFields(pArrayElement, NULL, pILFrame, addr, pVal, nextName, fullName) == S_OK)
+                return S_OK;
             return S_FALSE;
         }
 
@@ -12197,12 +12290,7 @@ public:
                 return S_FALSE;
             else if(_wcsncmp(baseTypeName, W("System.Object"), 13) != 0 && _wcsncmp(baseTypeName, W("System.ValueType"), 16) != 0)
             {
-                // currentExpansion[currentExpansionLen] = W('\0');
-                // wcscat_s(currentExpansion, currentExpansionSize, W(".\0"));
-                // wcscat_s(currentExpansion, currentExpansionSize, W("[basetype]"));
-                // for(int i = 0; i < indent; i++) ExtOut("    ");
-                // DMLOut(" |- %S %s\n", baseTypeName, DMLManagedVar(currentExpansion, currentFrame, W("[basetype]")));
-                if (GetObjOrValueFields(pInputValue, pBaseType, pILFrame, addr, pVal) == S_OK)
+                if (GetObjOrValueFields(pInputValue, pBaseType, pILFrame, addr, pVal, inputName, fullName) == S_OK)
                     return S_OK;
             }
         }
@@ -12210,7 +12298,7 @@ public:
         ULONG numFields = 0;
         HCORENUM fEnum = NULL;
         mdFieldDef fieldDef;
-        while(SUCCEEDED(pMD->EnumFields(&fEnum, currentTypeDef, &fieldDef, 1, &numFields)) && numFields != 0)
+        while(SUCCEEDED(pMD->EnumFieldsWithName(&fEnum, currentTypeDef, name, &fieldDef, 1, &numFields)) && numFields != 0)
         {
             ULONG             nameLen = 0;
             DWORD             fieldAttr = 0;
@@ -12218,10 +12306,6 @@ public:
             WCHAR             typeName[mdNameLen];
             if(SUCCEEDED(pMD->GetFieldProps(fieldDef, NULL, mdName, mdNameLen, &nameLen, &fieldAttr, NULL, NULL, NULL, NULL, NULL)))
             {
-                // currentExpansion[currentExpansionLen] = W('\0');
-                // wcscat_s(currentExpansion, currentExpansionSize, W(".\0"));
-                // wcscat_s(currentExpansion, currentExpansionSize, mdName);
-
                 ToRelease<ICorDebugValue> pFieldVal;
                 if(fieldAttr & fdLiteral)
                 {
@@ -12241,16 +12325,226 @@ public:
                             pObjValue->GetFieldValue(pClass, fieldDef, &pFieldVal);
                     }
 
-                    if (pFieldVal && GetObjOrValueFields(pFieldVal, NULL, pILFrame, addr, pVal) == S_OK)
-                        return S_OK;
+                    if (pFieldVal && GetObjOrValueFields(pFieldVal, NULL, pILFrame, addr, pVal, nextName, fullName) == S_OK)
+                        return S_OK; // FIXME: leaks fEnum ???
                 }
             }
         }
         pMD->CloseEnum(fEnum);
+
+        mdProperty propertyDef;
+        ULONG numProperties = 0;
+        HCORENUM propEnum = NULL;
+        while(SUCCEEDED(pMD->EnumProperties(&propEnum, currentTypeDef, &propertyDef, 1, &numProperties)) && numProperties != 0)
+        {
+            mdTypeDef  propertyClass;
+
+            ULONG propertyNameLen = 0;
+            DWORD propFlags;
+            PCCOR_SIGNATURE pvSig;
+            ULONG pbSig;
+            DWORD dwCPlusTypeFlag;
+            UVCP_CONSTANT pDefaultValue;
+            ULONG cchDefaultValue;
+            mdMethodDef mdSetter;
+            mdMethodDef mdGetter;
+            mdMethodDef rmdOtherMethod;
+            ULONG cOtherMethod;
+            WCHAR propertyName[mdNameLen] = W("\0");
+            if (SUCCEEDED(pMD->GetPropertyProps(propertyDef,
+                                                &propertyClass,
+                                                propertyName,
+                                                mdNameLen,
+                                                &propertyNameLen,
+                                                &propFlags,
+                                                &pvSig,
+                                                &pbSig,
+                                                &dwCPlusTypeFlag,
+                                                &pDefaultValue,
+                                                &cchDefaultValue,
+                                                &mdSetter,
+                                                &mdGetter,
+                                                &rmdOtherMethod,
+                                                1,
+                                                &cOtherMethod)))
+            {
+                if (_wcscmp(propertyName, name) == 0)
+                {
+                    // Find property in cache
+                    for (int i = 0; i < RESULT_CACHE_SIZE; i++)
+                    {
+                        if (g_resultCacheAddr[i] != 0 && _wcscmp(g_resultCacheName[i], fullName) == 0)
+                        {
+                            // Found it
+                            if (GetObjOrValueFields(g_resultCache[i], NULL, pILFrame, addr, pVal, nextName, fullName) == S_OK)
+                                return S_OK;  // FIXME: leaks propEnum ???
+                            printf("Propery cache failure\n");
+                        }
+                    }
+                    printf("Property not found in cache\n");
+                    break;
+                }
+            }
+        }
+        pMD->CloseEnum(propEnum);
+
+
         return S_FALSE;
     }
 
-    static HRESULT GetObjOrValue(CORDB_ADDRESS addr, ICorDebugValue **pVal, ICorDebugILFrame **pValILFrame)
+    static void PutWCHAR(const WCHAR *s)
+    {
+        if (!s)
+        {
+            printf("(null)\n");
+            return;
+        }
+        char cs[mdNameLen];
+        size_t len = _wcslen(s);
+        for (int i = 0; i <= len; i++)
+        {
+            cs[i] = (char)s[i];
+        }
+        printf("%s\n", cs);
+    }
+
+    static HRESULT GetParamName(IMetaDataImport *pMD,
+                                ICorDebugILFrame *pILFrame,
+                                mdMethodDef methodDef,
+                                ICorDebugModule *pModule,
+                                const WCHAR *inputName,
+                                CORDB_ADDRESS addr,
+                                ICorDebugValue **pVal)
+    {
+        HRESULT Status = S_FALSE; // S_OK;
+
+        WCHAR nameBuf[mdNameLen] = W("\0");
+        const WCHAR *name = inputName;
+
+        const WCHAR *nextName = inputName ? _wcschr(inputName, L'.') : NULL;
+        if (nextName)
+        {
+            wcsncat_s(nameBuf, _countof(nameBuf), inputName, nextName - inputName);
+            nextName++;
+            name = nameBuf;
+        }
+        if (!name)
+            return S_FALSE;
+
+        ULONG cParams = 0;
+        ToRelease<ICorDebugValueEnum> pParamEnum;
+        IfFailRet(pILFrame->EnumerateArguments(&pParamEnum));
+        IfFailRet(pParamEnum->GetCount(&cParams));
+        if (cParams > 0)
+        {
+            DWORD methAttr = 0;
+            IfFailRet(pMD->GetMethodProps(methodDef, NULL, NULL, 0, NULL, &methAttr, NULL, NULL, NULL, NULL));
+
+            for (ULONG i=0; i < cParams; i++)
+            {
+                ULONG paramNameLen = 0;
+                mdParamDef paramDef;
+                WCHAR paramName[mdNameLen] = W("\0");
+
+                if(i == 0 && (methAttr & mdStatic) == 0)
+                    swprintf_s(paramName, mdNameLen, W("this\0"));
+                else
+                {
+                    int idx = ((methAttr & mdStatic) == 0)? i : (i + 1);
+                    if(SUCCEEDED(pMD->GetParamForMethodIndex(methodDef, idx, &paramDef)))
+                        pMD->GetParamProps(paramDef, NULL, NULL, paramName, mdNameLen, &paramNameLen, NULL, NULL, NULL, NULL);
+                }
+                if(_wcslen(paramName) == 0)
+                    swprintf_s(paramName, mdNameLen, W("param_%d\0"), i);
+
+                ToRelease<ICorDebugValue> pValue;
+                ULONG cArgsFetched;
+                Status = pParamEnum->Next(1, &pValue, &cArgsFetched);
+
+                if (FAILED(Status))
+                {
+                    //ExtOut("  + (Error 0x%x retrieving parameter '%S')\n", Status, paramName);
+                    continue;
+                }
+
+                if (Status == S_FALSE)
+                {
+                    break;
+                }
+
+                // ================================================================================
+
+                if (_wcscmp(paramName, name) == 0)
+                {
+                    if (GetObjOrValueFields(pValue, NULL, pILFrame, addr, pVal, nextName, inputName) == S_OK)
+                    {
+                        return S_OK;
+                    }
+                }
+                else if (i == 0 && (methAttr & mdStatic) == 0) // this
+                {
+                    if (GetObjOrValueFields(pValue, NULL, pILFrame, addr, pVal, inputName, inputName) == S_OK)
+                    {
+                        return S_OK;
+                    }
+                }
+            }
+        }
+
+        ULONG cLocals = 0;
+        ToRelease<ICorDebugValueEnum> pLocalsEnum;
+        IfFailRet(pILFrame->EnumerateLocalVariables(&pLocalsEnum));
+        IfFailRet(pLocalsEnum->GetCount(&cLocals));
+        if (cLocals > 0)
+        {
+            bool symbolsAvailable = false;
+            SymbolReader symReader;
+            if(SUCCEEDED(symReader.LoadSymbols(pMD, pModule)))
+                symbolsAvailable = true;
+
+            for (ULONG i=0; i < cLocals; i++)
+            {
+                ULONG paramNameLen = 0;
+                WCHAR paramName[mdNameLen] = W("\0");
+
+                ToRelease<ICorDebugValue> pValue;
+                if(symbolsAvailable)
+                {
+                    Status = symReader.GetNamedLocalVariable(pILFrame, i, paramName, mdNameLen, &pValue);
+                }
+                else
+                {
+                    ULONG cArgsFetched;
+                    Status = pLocalsEnum->Next(1, &pValue, &cArgsFetched);
+                }
+                if(_wcslen(paramName) == 0)
+                    swprintf_s(paramName, mdNameLen, W("local_%d\0"), i);
+
+                if (FAILED(Status))
+                {
+                    //ExtOut("  + (Error 0x%x retrieving local variable '%S')\n", Status, paramName);
+                    continue;
+                }
+
+                if (Status == S_FALSE)
+                {
+                    break;
+                }
+
+                if (_wcscmp(paramName, name) == 0)
+                {
+                    if (GetObjOrValueFields(pValue, NULL, pILFrame, addr, pVal, nextName, inputName) == S_OK)
+                    {
+                        return S_OK;
+                    }
+                }
+            }
+        }
+
+        return SUCCEEDED(Status) ? S_FALSE : Status;
+    }
+
+    static HRESULT GetObjOrValue(CORDB_ADDRESS addr, WCHAR *name, ICorDebugValue **pVal, ICorDebugILFrame **pValILFrame)
     {
         HRESULT Status;
         ToRelease<ICorDebugThread> pThread;
@@ -12289,70 +12583,42 @@ public:
             if (!SUCCEEDED(hrILFrame))
                 break;
 
-            ToRelease<ICorDebugValueEnum> pLocalEnum;
-            if (SUCCEEDED(pILFrame->EnumerateLocalVariables(&pLocalEnum)))
+            ToRelease<ICorDebugFunction> pFunction;
+            Status = pFrame->GetFunction(&pFunction);
+            if (FAILED(Status))
             {
-                //ExtOut("EnumerateLocalVariables\n");
-                ToRelease<ICorDebugValue> data;
-                unsigned int fetched = 0;
-                HRESULT hr = S_OK;
-                while (SUCCEEDED(pLocalEnum->Next(1, &data, &fetched)) && fetched == 1)
-                {
-                    //ExtOut("  ICorDebugValue = @ %p\n", (void*)data);
-                    if (GetObjOrValueFields(data, NULL, pILFrame, addr, pVal) == S_OK)
-                    {
-                        if (pValILFrame) *pValILFrame = pILFrame.Detach();
-                        //ExtOut("  Found!\n");
-                        return S_OK;
-                    }
-                };
+                // We're on a JITted frame, but there's no Function for it.  So it must
+                // be... 
+                // ExtOut("[IL Stub or LCG]\n");
+                continue;
             }
-            ToRelease<ICorDebugValueEnum> pParamEnum;
-            if (SUCCEEDED(pILFrame->EnumerateArguments(&pParamEnum)))
+
+            ToRelease<ICorDebugClass> pClass;
+            ToRelease<ICorDebugModule> pModule;
+            mdMethodDef methodDef;
+            IfFailRet(pFunction->GetClass(&pClass));
+            IfFailRet(pFunction->GetModule(&pModule));
+            IfFailRet(pFunction->GetToken(&methodDef));
+
+            WCHAR wszModuleName[100];
+            ULONG32 cchModuleNameActual;
+            IfFailRet(pModule->GetName(_countof(wszModuleName), &cchModuleNameActual, wszModuleName));
+
+            ToRelease<IUnknown> pMDUnknown;
+            ToRelease<IMetaDataImport> pMD;
+            ToRelease<IMDInternalImport> pMDInternal;
+            IfFailRet(pModule->GetMetaDataInterface(IID_IMetaDataImport, &pMDUnknown));
+            IfFailRet(pMDUnknown->QueryInterface(IID_IMetaDataImport, (LPVOID*) &pMD));
+            IfFailRet(GetMDInternalFromImport(pMD, &pMDInternal));
+
+            mdTypeDef typeDef;
+            IfFailRet(pClass->GetToken(&typeDef));
+
+            ToRelease<ICorDebugValue> data;
+            if (GetParamName(pMD, pILFrame, methodDef, pModule, name, addr, pVal) == S_OK)
             {
-                //ExtOut("EnumerateArguments\n");
-                ToRelease<ICorDebugValue> data;
-                unsigned int fetched = 0;
-                HRESULT hr = S_OK;
-                while (SUCCEEDED(pParamEnum->Next(1, &data, &fetched)) && fetched == 1)
-                {
-                    //ExtOut("  ICorDebugValue = @ %p    frame = %i\n", (void*)data, currentFrame);
-                    if (GetObjOrValueFields(data, NULL, pILFrame, addr, pVal) == S_OK)
-                    {
-                        if (pValILFrame) *pValILFrame = pILFrame.Detach();
-                        return S_OK;
-                    }
-                };
-            }
-            if (currentFrame == 0)
-            {
-                for (int i = 0; i < RESULT_CACHE_SIZE; i++)
-                {
-                    if (g_resultCache[i])
-                    {
-                        if (GetObjOrValueFields(g_resultCache[i], NULL, pILFrame, addr, pVal) == S_OK)
-                        {
-                            if (pValILFrame) *pValILFrame = pILFrame.Detach();
-                            return S_OK;
-                        }
-                    }
-                }
-            //     ToRelease<ICorDebugProcess5> p5;
-            //     if (SUCCEEDED(g_pCorDebugProcess->QueryInterface(IID_ICorDebugProcess5, (void**)&p5)))
-            //     {
-            //         ToRelease<ICorDebugObjectValue> pObjValue;
-            //         if (SUCCEEDED(p5->GetObject(addr, &pObjValue)))
-            //         {
-            //             ToRelease<ICorDebugValue> pInputValue;
-            //             if (SUCCEEDED(pObjValue->QueryInterface(IID_ICorDebugValue, (LPVOID*) &pInputValue)))
-            //             {
-            //                 *pVal = pInputValue.Detach();
-            //                 *pValILFrame = pILFrame.Detach();
-            //                 ExtOut("  ICorDebugValue = @ %p\n", (void*)*pVal);
-            //                 return S_OK;
-            //             }
-            //         }
-            //     }
+                if (pValILFrame) *pValILFrame = pILFrame.Detach();
+                return S_OK;
             }
         }
         return E_INVALIDARG;
@@ -13315,19 +13581,23 @@ DECLARE_API(DumpObjOrValue)
     BOOL bNoFields = FALSE;
     BOOL bReset = FALSE;
     StringHolder str_Object;
+    StringHolder str_Name;
     CMDOption option[] = 
     {   // name, vptr, type, hasValue
         {"-reset", &bReset, COBOOL, FALSE},
     };
     CMDValue arg[] = 
     {   // vptr, type
-        {&str_Object.data, COSTRING}
+        {&str_Object.data, COSTRING},
+        {&str_Name.data, COSTRING},
     };
     size_t nArg;
     if (!GetCMDOption(args, option, _countof(option), arg, _countof(arg), &nArg)) 
     {
         return Status;
     }
+    WCHAR pName[mdNameLen];
+    swprintf_s(pName, _countof(pName), W("%S"), str_Name.data);
 
     if (bReset)
     {
@@ -13389,22 +13659,45 @@ DECLARE_API(DumpObjOrValue)
             return E_FAIL;
         }
 
-        int cacheAddr = addr & RESULT_CACHE_MASK;
-        int i = 0;
-        for (; i < RESULT_CACHE_SIZE; i++)
+        int ind = GetResultCacheIndex(addr);
+        if (ind == -1)
+            return E_OUTOFMEMORY;
+
+        if (g_resultCacheAddr[ind])
         {
-            int ind = (cacheAddr + i) & RESULT_CACHE_MASK;
-            if (g_resultCacheAddr[ind] == 0)
+            g_resultCache[ind]->Release();
+        } else {
+            g_resultCacheAddr[ind] = addr;
+        }
+        g_resultCache[ind] = resultValue.Detach();
+
+        size_t len = _wcslen(pName);
+        g_resultCacheName[ind] = new WCHAR[len + 1];
+        swprintf_s(g_resultCacheName[ind], len + 1, W("%S"), str_Name.data);
+
+        ToRelease<ICorDebugType> pType;
+        ToRelease<ICorDebugValue2> pValue2;
+        IfFailRet(g_resultCache[ind]->QueryInterface(IID_ICorDebugValue2, (LPVOID *) &pValue2));
+        IfFailRet(pValue2->GetExactType(&pType));
+
+        WCHAR className[mdNameLen];
+        ClrStackImplWithICorDebug::GetTypeOfValue(pType, className, mdNameLen);
+
+        if (_wcscmp(className, W("System.String")) != 0) // Do not unbox strings
+        {
+            ToRelease<ICorDebugValue> pUnboxedValue;
+            BOOL isNull;
+            if (SUCCEEDED(ClrStackImplWithICorDebug::DereferenceAndUnboxValue(g_resultCache[ind], &pUnboxedValue, &isNull)))
             {
-                g_resultCacheAddr[ind] = addr;
-                g_resultCache[ind] = resultValue.Detach();
-                break;
+                if (isNull)
+                    addr = 0;
+                else
+                    IfFailRet(pUnboxedValue->GetAddress(&addr));
             }
         }
-        if (i == RESULT_CACHE_SIZE)
-        {
-            return Status;
-        }
+
+        ExtOut("Type: %S\n", className);
+        ExtOut("Address: %llx\n", (long long)addr);
 
         return Status;
     }
@@ -13423,7 +13716,7 @@ DECLARE_API(DumpObjOrValue)
     ToRelease<ICorDebugValue> testValue;
     ToRelease<ICorDebugILFrame> pILFrame;
 
-    if (SUCCEEDED(ClrStackImplWithICorDebug::GetObjOrValue(p_Object, &testValue, &pILFrame)))
+    if (SUCCEEDED(ClrStackImplWithICorDebug::GetObjOrValue(p_Object, pName, &testValue, &pILFrame)))
     {
         ClrStackImplWithICorDebug::PrintFieldsAndProperties(testValue, NULL, pILFrame);
     }
