@@ -13683,16 +13683,27 @@ DECLARE_API(DumpObjOrValue)
         WCHAR className[mdNameLen];
         ClrStackImplWithICorDebug::GetTypeOfValue(pType, className, mdNameLen);
 
-        if (_wcscmp(className, W("System.String")) != 0) // Do not unbox strings
+        BOOL isString = _wcscmp(className, W("System.String")) == 0;
+        if (!isString) // Do not unbox strings
         {
             ToRelease<ICorDebugValue> pUnboxedValue;
             BOOL isNull;
             if (SUCCEEDED(ClrStackImplWithICorDebug::DereferenceAndUnboxValue(g_resultCache[ind], &pUnboxedValue, &isNull)))
             {
-                if (isNull)
-                    addr = 0;
-                else
-                    IfFailRet(pUnboxedValue->GetAddress(&addr));
+                ToRelease<ICorDebugArrayValue> pArrayValue;
+
+                BOOL isArray = !isNull && SUCCEEDED(pUnboxedValue->QueryInterface(IID_ICorDebugArrayValue, (LPVOID *) &pArrayValue));
+
+                if (isArray)
+                {
+                    g_resultCache[ind]->Release();
+                    g_resultCache[ind] = pUnboxedValue.Detach();
+                } else {
+                    if (isNull)
+                        addr = 0;
+                    else
+                        IfFailRet(pUnboxedValue->GetAddress(&addr));
+                }
             }
         }
 
