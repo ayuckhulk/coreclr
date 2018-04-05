@@ -3858,20 +3858,13 @@ bool UnwindEbpDoubleAlignFrame(
             //   epilog: add esp, 12
             //           ret
             // SP alignment padding should be added for all instructions except the first one and the last one.
-            TADDR funcletStart = pCodeInfo->GetJitManager()->GetFuncletStartAddress(pCodeInfo);
-
-            const ULONG32 funcletLastInstSize = 1; // 0xc3, ret
-            BOOL atFuncletLastInst = (pCodeInfo->GetRelOffset() + funcletLastInstSize) >= info->methodSize;
-            if (!atFuncletLastInst)
+            const TADDR funcletStart = pCodeInfo->GetJitManager()->GetFuncletStartAddress(pCodeInfo);
+            const DWORD curOffset = pCodeInfo->GetRelOffset();
+            if (funcletStart != pCodeInfo->GetCodeAddress() &&
+                !CheckInstrBytePattern(methodStart[curOffset] & X86_INSTR_RET, X86_INSTR_RET, methodStart[curOffset]))
             {
-                EECodeInfo nextCodeInfo;
-                nextCodeInfo.Init(pCodeInfo->GetCodeAddress() + funcletLastInstSize);
-                atFuncletLastInst = !nextCodeInfo.IsValid() || !nextCodeInfo.IsFunclet() ||
-                    nextCodeInfo.GetJitManager()->GetFuncletStartAddress(&nextCodeInfo) != funcletStart;
-            }
-
-            if (!atFuncletLastInst && funcletStart != pCodeInfo->GetCodeAddress())
                 baseSP += 12;
+            }
 
             pContext->PCTAddr = baseSP;
             pContext->ControlPC = *PTR_PCODE(pContext->PCTAddr);
